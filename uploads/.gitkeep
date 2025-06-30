@@ -1,0 +1,11 @@
+# Dossier uploads pour MailFlow
+# Ce dossier contient les fichiers uploadés par l'application
+
+## Structure:
+- courriers/
+  - arrivee/    # Scans des courriers d'arrivée
+  - depart/     # Scans des courriers de départ
+
+## Permissions:
+- Lecture/écriture pour l'application
+- Accès sécurisé via Firebase Storage
