@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Upload, Calendar, User, FileText, Tag, Search, Eye, Edit, Trash2, Download, AlertCircle, CheckCircle, Clock, X, PlaneLanding, Phone, Fax, Cloud, FileCheck, Sparkles, Loader } from 'lucide-react';
+import { Plus, Upload, Calendar, User, FileText, Tag, Search, Eye, Edit, Trash2, Download, AlertCircle, CheckCircle, Clock, X, PlaneLanding, Phone, Fan as Fax, Cloud, FileCheck, Sparkles, Loader } from 'lucide-react';
 import { DatabaseService } from '../../services/DatabaseService';
 import { IncomingMail, Category, Tag as TagType, Sender } from '../../types';
 import { useNotifications } from '../../hooks/useNotifications';
