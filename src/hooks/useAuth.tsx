@@ -1,5 +1,5 @@
 import { createContext, useContext, useEffect, useState, ReactNode } from 'react';
-import { DatabaseService } from '../services/DatabaseService';
+import { DatabaseService } from '../services/ApiService';
 import { User, ROLE_PERMISSIONS } from '../types';
 import { useNotifications } from './useNotifications';
 
