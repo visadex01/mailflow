@@ -7,8 +7,7 @@ import {
   X, 
   CheckCircle
 } from 'lucide-react';
-import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc } from 'firebase/firestore';
-import { db } from '../../config/firebase';
+import { DatabaseService } from '../../services/DatabaseService';
 import { Tag as TagType } from '../../types';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAuth } from '../../hooks/useAuth';
@@ -47,8 +46,8 @@ const TagsModule = () => {
   const loadTags = async () => {
     try {
       setLoading(true);
-      const snapshot = await getDocs(collection(db, 'tags'));
-      setTags(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TagType)));
+      const data = await DatabaseService.getTags();
+      setTags(data);
     } catch (error) {
       console.error('Erreur lors du chargement des tags:', error);
       addNotification({
@@ -71,14 +70,11 @@ const TagsModule = () => {
         name: formData.name,
         type: formData.type,
         color: formData.color,
-        createdAt: new Date(),
-        createdBy: currentUser.id,
-        isActive: true
+        createdBy: currentUser.id
       };
 
       if (editingTag) {
-        // Mise à jour
-        await updateDoc(doc(db, 'tags', editingTag.id), tagData);
+        await DatabaseService.updateTag(editingTag.id, tagData);
         addNotification({
           type: 'success',
           title: 'Tag modifié',
@@ -86,8 +82,7 @@ const TagsModule = () => {
           persistent: false
         });
       } else {
-        // Création
-        await addDoc(collection(db, 'tags'), tagData);
+        await DatabaseService.createTag(tagData);
         addNotification({
           type: 'success',
           title: 'Tag créé',
@@ -127,7 +122,7 @@ const TagsModule = () => {
     }
 
     try {
-      await deleteDoc(doc(db, 'tags', tagId));
+      await DatabaseService.deleteTag(tagId);
       addNotification({
         type: 'success',
         title: 'Tag supprimé',

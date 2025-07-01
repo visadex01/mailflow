@@ -8,8 +8,7 @@ import {
   CheckCircle,
   AlertCircle
 } from 'lucide-react';
-import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc } from 'firebase/firestore';
-import { db } from '../../config/firebase';
+import { DatabaseService } from '../../services/DatabaseService';
 import { Category } from '../../types';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAuth } from '../../hooks/useAuth';
@@ -41,8 +40,8 @@ const CategoriesModule = () => {
   const loadCategories = async () => {
     try {
       setLoading(true);
-      const snapshot = await getDocs(collection(db, 'categories'));
-      setCategories(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Category)));
+      const data = await DatabaseService.getCategories();
+      setCategories(data);
     } catch (error) {
       console.error('Erreur lors du chargement des catégories:', error);
       addNotification({
@@ -65,14 +64,11 @@ const CategoriesModule = () => {
         name: formData.name,
         description: formData.description,
         color: formData.color,
-        createdAt: new Date(),
-        createdBy: currentUser.id,
-        isActive: true
+        createdBy: currentUser.id
       };
 
       if (editingCategory) {
-        // Mise à jour
-        await updateDoc(doc(db, 'categories', editingCategory.id), categoryData);
+        await DatabaseService.updateCategory(editingCategory.id, categoryData);
         addNotification({
           type: 'success',
           title: 'Catégorie modifiée',
@@ -80,8 +76,7 @@ const CategoriesModule = () => {
           persistent: false
         });
       } else {
-        // Création
-        await addDoc(collection(db, 'categories'), categoryData);
+        await DatabaseService.createCategory(categoryData);
         addNotification({
           type: 'success',
           title: 'Catégorie créée',
@@ -121,7 +116,7 @@ const CategoriesModule = () => {
     }
 
     try {
-      await deleteDoc(doc(db, 'categories', categoryId));
+      await DatabaseService.deleteCategory(categoryId);
       addNotification({
         type: 'success',
         title: 'Catégorie supprimée',

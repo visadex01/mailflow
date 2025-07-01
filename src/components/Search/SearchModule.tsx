@@ -14,8 +14,7 @@ import {
   AlertCircle,
   X
 } from 'lucide-react';
-import { collection, getDocs, query, where, orderBy } from 'firebase/firestore';
-import { db } from '../../config/firebase';
+import { DatabaseService } from '../../services/DatabaseService';
 import { IncomingMail, OutgoingMail, Category, Tag as TagType, Sender } from '../../types';
 import { useNotifications } from '../../hooks/useNotifications';
 
@@ -56,15 +55,15 @@ const SearchModule = () => {
 
   const loadReferenceData = async () => {
     try {
-      const [categoriesSnapshot, tagsSnapshot, sendersSnapshot] = await Promise.all([
-        getDocs(collection(db, 'categories')),
-        getDocs(collection(db, 'tags')),
-        getDocs(collection(db, 'senders'))
+      const [categoriesData, tagsData, sendersData] = await Promise.all([
+        DatabaseService.getCategories(),
+        DatabaseService.getTags(),
+        DatabaseService.getSenders()
       ]);
 
-      setCategories(categoriesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Category)));
-      setTags(tagsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TagType)));
-      setSenders(sendersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sender)));
+      setCategories(categoriesData);
+      setTags(tagsData);
+      setSenders(sendersData);
     } catch (error) {
       console.error('Erreur lors du chargement des données de référence:', error);
     }
@@ -83,98 +82,55 @@ const SearchModule = () => {
 
     try {
       setLoading(true);
-      const searchResults: SearchResult[] = [];
-
-      // Recherche dans les courriers d'arrivée
-      if (searchType === 'all' || searchType === 'incoming') {
-        const incomingSnapshot = await getDocs(collection(db, 'incomingMails'));
-        const incomingMails = incomingSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as IncomingMail));
-
-        incomingMails.forEach(mail => {
-          const category = categories.find(c => c.id === mail.categoryId);
-          const sender = senders.find(s => s.id === mail.senderId);
-          const mailTags = tags.filter(t => mail.tags.includes(t.id));
-
-          const matchesText = !searchTerm.trim() || 
-            mail.subject.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            mail.reference.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (mail.summary && mail.summary.toLowerCase().includes(searchTerm.toLowerCase())) ||
-            (sender && sender.name.toLowerCase().includes(searchTerm.toLowerCase()));
-
-          const matchesCategory = !selectedCategory || mail.categoryId === selectedCategory;
-          const matchesPriority = !selectedPriority || mail.priority === selectedPriority;
-          const matchesTags = selectedTags.length === 0 || selectedTags.some(tagId => mail.tags.includes(tagId));
-          
-          const mailDate = new Date(mail.arrivalDate);
-          const matchesDateFrom = !dateFrom || mailDate >= new Date(dateFrom);
-          const matchesDateTo = !dateTo || mailDate <= new Date(dateTo);
-
-          if (matchesText && matchesCategory && matchesPriority && matchesTags && matchesDateFrom && matchesDateTo) {
-            searchResults.push({
-              id: mail.id,
-              type: 'incoming',
-              reference: mail.reference,
-              subject: mail.subject,
-              date: new Date(mail.arrivalDate),
-              category,
-              tags: mailTags,
-              sender,
-              priority: mail.priority,
-              scanUrl: mail.scanUrl,
-              summary: mail.summary
-            });
-          }
-        });
-      }
-
-      // Recherche dans les courriers de départ
-      if (searchType === 'all' || searchType === 'outgoing') {
-        const outgoingSnapshot = await getDocs(collection(db, 'outgoingMails'));
-        const outgoingMails = outgoingSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as OutgoingMail));
-
-        outgoingMails.forEach(mail => {
-          const category = categories.find(c => c.id === mail.categoryId);
-          const mailTags = tags.filter(t => mail.tags.includes(t.id));
-
-          const matchesText = !searchTerm.trim() || 
-            mail.subject.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            mail.reference.toLowerCase().includes(searchTerm.toLowerCase()) ||
-            (mail.content && mail.content.toLowerCase().includes(searchTerm.toLowerCase()));
-
-          const matchesCategory = !selectedCategory || mail.categoryId === selectedCategory;
-          const matchesPriority = !selectedPriority || mail.priority === selectedPriority;
-          const matchesTags = selectedTags.length === 0 || selectedTags.some(tagId => mail.tags.includes(tagId));
-          
-          const mailDate = new Date(mail.sendDate);
-          const matchesDateFrom = !dateFrom || mailDate >= new Date(dateFrom);
-          const matchesDateTo = !dateTo || mailDate <= new Date(dateTo);
-
-          if (matchesText && matchesCategory && matchesPriority && matchesTags && matchesDateFrom && matchesDateTo) {
-            searchResults.push({
-              id: mail.id,
-              type: 'outgoing',
-              reference: mail.reference,
-              subject: mail.subject,
-              date: new Date(mail.sendDate),
-              category,
-              tags: mailTags,
-              priority: mail.priority,
-              scanUrl: mail.scanUrl,
-              content: mail.content
-            });
-          }
-        });
-      }
-
-      // Trier par date décroissante
-      searchResults.sort((a, b) => b.date.getTime() - a.date.getTime());
       
-      setResults(searchResults);
+      const searchParams = {
+        searchTerm: searchTerm.trim(),
+        mailType: searchType,
+        categoryId: selectedCategory,
+        priority: selectedPriority,
+        dateFrom,
+        dateTo,
+        tags: selectedTags
+      };
+
+      const searchResults = await DatabaseService.searchMails(searchParams);
+      
+      // Transformer les résultats pour l'affichage
+      const transformedResults: SearchResult[] = searchResults.map(result => ({
+        id: result.id,
+        type: result.mail_type,
+        reference: result.reference,
+        subject: result.subject,
+        date: new Date(result.mail_date),
+        category: result.category_name ? {
+          id: '',
+          name: result.category_name,
+          color: result.category_color || '#3B82F6',
+          createdAt: new Date(),
+          createdBy: '',
+          isActive: true
+        } : undefined,
+        tags: [], // TODO: Gérer les tags dans la recherche
+        sender: result.sender_name ? {
+          id: '',
+          name: result.sender_name,
+          email: result.sender_email,
+          createdAt: new Date(),
+          createdBy: '',
+          isActive: true
+        } : undefined,
+        priority: result.priority,
+        scanUrl: result.scan_url,
+        summary: result.content,
+        content: result.content
+      }));
+      
+      setResults(transformedResults);
       
       addNotification({
         type: 'success',
         title: 'Recherche effectuée',
-        message: `${searchResults.length} résultat(s) trouvé(s).`,
+        message: `${transformedResults.length} résultat(s) trouvé(s).`,
         persistent: false
       });
 

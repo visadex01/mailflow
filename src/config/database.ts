@@ -12,11 +12,11 @@ interface DatabaseConfig {
 }
 
 const config: DatabaseConfig = {
-  host: import.meta.env.VITE_DB_HOST || 'localhost',
-  port: parseInt(import.meta.env.VITE_DB_PORT || '3306'),
-  user: import.meta.env.VITE_DB_USER || 'mailflow',
-  password: import.meta.env.VITE_DB_PASSWORD || 'mailflow',
-  database: import.meta.env.VITE_DB_NAME || 'mailflow',
+  host: 'localhost',
+  port: 3306,
+  user: 'mailflow',
+  password: 'mailflow',
+  database: 'mailflow',
   connectionLimit: 10,
   charset: 'utf8mb4',
   timezone: '+00:00'
@@ -42,6 +42,24 @@ export const executeQuery = async (query: string, params: any[] = []): Promise<a
   }
 };
 
+export const executeTransaction = async (queries: Array<{query: string, params: any[]}>) => {
+  const connection = await createPool().getConnection();
+  try {
+    await connection.beginTransaction();
+    
+    for (const { query, params } of queries) {
+      await connection.execute(query, params);
+    }
+    
+    await connection.commit();
+  } catch (error) {
+    await connection.rollback();
+    throw error;
+  } finally {
+    connection.release();
+  }
+};
+
 export const testConnection = async (): Promise<boolean> => {
   try {
     await executeQuery('SELECT 1');
@@ -52,4 +70,4 @@ export const testConnection = async (): Promise<boolean> => {
   }
 };
 
-export default { createPool, executeQuery, testConnection };
+export default { createPool, executeQuery, executeTransaction, testConnection };

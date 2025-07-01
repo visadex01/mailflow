@@ -21,8 +21,7 @@ import {
   X,
   Eye
 } from 'lucide-react';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
-import { db } from '../../config/firebase';
+import { DatabaseService } from '../../services/DatabaseService';
 import { Settings as SettingsType } from '../../types';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAuth } from '../../hooks/useAuth';
@@ -43,28 +42,6 @@ const SettingsModule = () => {
       incoming: './uploads/courriers/arrivee',
       outgoing: './uploads/courriers/depart'
     },
-    externalServices: {
-      googleDrive: {
-        enabled: false,
-        folderId: ''
-      },
-      dropbox: {
-        enabled: false,
-        accessToken: ''
-      },
-      ftp: {
-        enabled: false,
-        host: '',
-        username: '',
-        password: '',
-        port: 21
-      }
-    },
-    autoBackup: {
-      enabled: false,
-      frequency: 'weekly',
-      service: 'googleDrive'
-    },
     notifications: {
       email: true,
       browser: true,
@@ -79,12 +56,8 @@ const SettingsModule = () => {
   const loadSettings = async () => {
     try {
       setLoading(true);
-      const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
-      
-      if (settingsDoc.exists()) {
-        const data = settingsDoc.data() as SettingsType;
-        setSettings(data);
-      }
+      const data = await DatabaseService.getSettings();
+      setSettings(data);
     } catch (error) {
       console.error('Erreur lors du chargement des paramètres:', error);
       addNotification({
@@ -103,14 +76,7 @@ const SettingsModule = () => {
 
     try {
       setSaving(true);
-      
-      const settingsData = {
-        ...settings,
-        updatedAt: serverTimestamp(),
-        updatedBy: currentUser.id
-      };
-
-      await setDoc(doc(db, 'settings', 'global'), settingsData, { merge: true });
+      await DatabaseService.updateSettings(settings);
       
       addNotification({
         type: 'success',
@@ -140,28 +106,6 @@ const SettingsModule = () => {
           incoming: './uploads/courriers/arrivee',
           outgoing: './uploads/courriers/depart'
         },
-        externalServices: {
-          googleDrive: {
-            enabled: false,
-            folderId: ''
-          },
-          dropbox: {
-            enabled: false,
-            accessToken: ''
-          },
-          ftp: {
-            enabled: false,
-            host: '',
-            username: '',
-            password: '',
-            port: 21
-          }
-        },
-        autoBackup: {
-          enabled: false,
-          frequency: 'weekly',
-          service: 'googleDrive'
-        },
         notifications: {
           email: true,
           browser: true,
@@ -169,7 +113,6 @@ const SettingsModule = () => {
         }
       });
       
-      // Reset access results
       setAccessResults({});
       
       addNotification({
@@ -181,79 +124,8 @@ const SettingsModule = () => {
     }
   };
 
-  const selectFolder = async (type: 'incoming' | 'outgoing') => {
-    try {
-      // Vérifier si l'API File System Access est supportée
-      if ('showDirectoryPicker' in window) {
-        const directoryHandle = await (window as any).showDirectoryPicker({
-          mode: 'readwrite',
-          startIn: 'documents'
-        });
-        
-        // Obtenir le chemin complet du dossier
-        let folderPath = '';
-        try {
-          // Essayer d'obtenir le chemin complet si possible
-          if (directoryHandle.getDirectoryHandle) {
-            folderPath = directoryHandle.name;
-          } else {
-            folderPath = directoryHandle.name;
-          }
-          
-          // Si on peut accéder au chemin parent, construire le chemin complet
-          if (directoryHandle.resolve) {
-            const pathSegments = await directoryHandle.resolve();
-            if (pathSegments && pathSegments.length > 0) {
-              folderPath = '/' + pathSegments.join('/');
-            }
-          }
-        } catch (pathError) {
-          // Fallback au nom du dossier si on ne peut pas obtenir le chemin complet
-          folderPath = directoryHandle.name;
-        }
-        
-        // Mettre à jour le chemin du dossier
-        setSettings(prev => ({
-          ...prev,
-          storageFolders: {
-            ...prev.storageFolders!,
-            [type]: folderPath
-          }
-        }));
-
-        // Tester l'accès immédiatement
-        await testFolderAccess(type, folderPath, directoryHandle);
-        
-        addNotification({
-          type: 'success',
-          title: 'Dossier sélectionné',
-          message: `Le dossier "${folderPath}" a été sélectionné pour les courriers ${type === 'incoming' ? 'd\'arrivée' : 'de départ'}.`,
-          persistent: false
-        });
-      } else {
-        // Fallback pour les navigateurs qui ne supportent pas l'API
-        addNotification({
-          type: 'warning',
-          title: 'API non supportée',
-          message: 'Votre navigateur ne supporte pas la sélection de dossiers. Veuillez saisir le chemin manuellement.',
-          persistent: false
-        });
-      }
-    } catch (error: any) {
-      if (error.name !== 'AbortError') {
-        console.error('Erreur lors de la sélection du dossier:', error);
-        addNotification({
-          type: 'error',
-          title: 'Erreur de sélection',
-          message: 'Impossible de sélectionner le dossier.',
-          persistent: true
-        });
-      }
-    }
-  };
-
-  const testFolderAccess = async (type: 'incoming' | 'outgoing', folderPath?: string, directoryHandle?: any) => {
-    const path = folderPath || settings.storageFolders?.[type] || '';
+  const testFolderAccess = async (type: 'incoming' | 'outgoing') => {
+    const path = settings.storageFolders?.[type] || '';
     
     if (!path) {
       addNotification({
@@ -269,69 +141,28 @@ const SettingsModule = () => {
       setTestingAccess(prev => ({ ...prev, [type]: true }));
       setAccessResults(prev => ({ ...prev, [type]: null }));
 
-      if (directoryHandle) {
-        // Test avec l'API File System Access
-        try {
-          // Tester la lecture
-          const entries = [];
-          for await (const entry of directoryHandle.values()) {
-            entries.push(entry);
-            if (entries.length >= 1) break; // Juste pour tester l'accès
-          }
-
-          // Tester l'écriture en créant un fichier temporaire
-          const testFileName = `mailflow_test_${Date.now()}.txt`;
-          const testFileHandle = await directoryHandle.getFileHandle(testFileName, { create: true });
-          const writable = await testFileHandle.createWritable();
-          await writable.write('Test d\'accès MailFlow');
-          await writable.close();
-
-          // Supprimer le fichier de test
-          await directoryHandle.removeEntry(testFileName);
-
+      // Simulation d'un test d'accès
+      setTimeout(() => {
+        const isValidPath = path.length > 0 && !path.includes('..') && (path.startsWith('/') || path.startsWith('./') || path.match(/^[A-Za-z]:\\/));
+        
+        if (isValidPath) {
           setAccessResults(prev => ({ ...prev, [type]: 'success' }));
           addNotification({
-            type: 'success',
-            title: 'Test d\'accès réussi',
-            message: `Accès en lecture/écriture confirmé pour le dossier ${type === 'incoming' ? 'd\'arrivée' : 'de départ'}.`,
+            type: 'info',
+            title: 'Chemin validé',
+            message: `Le chemin "${path}" semble valide. Vérifiez manuellement les permissions d'accès.`,
             persistent: false
           });
-        } catch (accessError) {
-          console.error('Erreur d\'accès au dossier:', accessError);
+        } else {
           setAccessResults(prev => ({ ...prev, [type]: 'error' }));
           addNotification({
             type: 'error',
-            title: 'Erreur d\'accès',
-            message: `Impossible d'accéder au dossier en lecture/écriture. Vérifiez les permissions.`,
-            persistent: true
+            title: 'Chemin invalide',
+            message: `Le chemin "${path}" ne semble pas valide.`,
+            persistent: false
           });
         }
-      } else {
-        // Simulation pour les chemins saisis manuellement
-        // Dans un environnement réel, ceci devrait être géré côté serveur
-        setTimeout(() => {
-          // Simulation d'un test d'accès
-          const isValidPath = path.length > 0 && !path.includes('..') && (path.startsWith('/') || path.startsWith('./') || path.match(/^[A-Za-z]:\\/));
-          
-          if (isValidPath) {
-            setAccessResults(prev => ({ ...prev, [type]: 'success' }));
-            addNotification({
-              type: 'info',
-              title: 'Chemin validé',
-              message: `Le chemin "${path}" semble valide. Vérifiez manuellement les permissions d'accès.`,
-              persistent: false
-            });
-          } else {
-            setAccessResults(prev => ({ ...prev, [type]: 'error' }));
-            addNotification({
-              type: 'error',
-              title: 'Chemin invalide',
-              message: `Le chemin "${path}" ne semble pas valide.`,
-              persistent: false
-            });
-          }
-        }, 1000);
-      }
+      }, 1000);
     } catch (error) {
       console.error('Erreur lors du test d\'accès:', error);
       setAccessResults(prev => ({ ...prev, [type]: 'error' }));
@@ -346,41 +177,9 @@ const SettingsModule = () => {
     }
   };
 
-  const openFolder = async (type: 'incoming' | 'outgoing') => {
-    const path = settings.storageFolders?.[type];
-    if (!path) return;
-
-    try {
-      // Tenter d'ouvrir le dossier dans l'explorateur de fichiers
-      if ('showDirectoryPicker' in window) {
-        await (window as any).showDirectoryPicker({
-          mode: 'read',
-          startIn: 'documents'
-        });
-      } else {
-        addNotification({
-          type: 'info',
-          title: 'Ouverture manuelle',
-          message: `Ouvrez manuellement le dossier : ${path}`,
-          persistent: false
-        });
-      }
-    } catch (error: any) {
-      if (error.name !== 'AbortError') {
-        addNotification({
-          type: 'info',
-          title: 'Chemin du dossier',
-          message: `Dossier configuré : ${path}`,
-          persistent: false
-        });
-      }
-    }
-  };
-
   const tabs = [
     { id: 'general', label: 'Général', icon: Settings },
     { id: 'storage', label: 'Stockage', icon: HardDrive },
-    { id: 'backup', label: 'Sauvegarde', icon: Cloud },
     { id: 'notifications', label: 'Notifications', icon: Bell },
     { id: 'security', label: 'Sécurité', icon: Shield }
   ];
@@ -501,12 +300,7 @@ const SettingsModule = () => {
                               <span><code className="bg-blue-100 px-1 rounded">{'{reference}'}</code> - Référence du courrier</span>
                               <span><code className="bg-blue-100 px-1 rounded">{'{date}'}</code> - Date (YYYY-MM-DD)</span>
                               <span><code className="bg-blue-100 px-1 rounded">{'{subject}'}</code> - Objet du courrier</span>
-                              <span><code className="bg-blue-100 px-1 rounded">{'{category}'}</code> - Catégorie</span>
-                              <span><code className="bg-blue-100 px-1 rounded">{'{priority}'}</code> - Priorité</span>
                             </div>
-                            <p className="mt-2 text-blue-600">
-                              Exemple : <code className="bg-blue-100 px-1 rounded">arrivee_REF001_2025-01-27_demande-information.pdf</code>
-                            </p>
                           </div>
                         </div>
                       </div>
@@ -552,22 +346,6 @@ const SettingsModule = () => {
                           placeholder="./uploads/courriers/arrivee"
                         />
                         <button
-                          onClick={() => selectFolder('incoming')}
-                          className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg flex items-center space-x-2 transition-colors duration-200"
-                          title="Parcourir et sélectionner un dossier"
-                        >
-                          <FolderOpen size={16} />
-                          <span>Parcourir</span>
-                        </button>
-                        <button
-                          onClick={() => openFolder('incoming')}
-                          disabled={!settings.storageFolders?.incoming}
-                          className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
-                          title="Ouvrir le dossier"
-                        >
-                          <Eye size={16} />
-                        </button>
-                        <button
                           onClick={() => testFolderAccess('incoming')}
                           disabled={testingAccess.incoming || !settings.storageFolders?.incoming}
                           className="px-3 py-2 bg-green-100 hover:bg-green-200 text-green-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200 flex items-center space-x-1"
@@ -593,14 +371,14 @@ const SettingsModule = () => {
                             <>
                               <Check className="h-4 w-4 text-green-600" />
                               <span className="text-sm text-green-700 font-medium">
-                                Accès confirmé - Lecture/écriture autorisée
+                                Chemin valide
                               </span>
                             </>
                           ) : (
                             <>
                               <X className="h-4 w-4 text-red-600" />
                               <span className="text-sm text-red-700 font-medium">
-                                Accès refusé - Vérifiez les permissions du dossier
+                                Chemin invalide
                               </span>
                             </>
                           )}
@@ -637,22 +415,6 @@ const SettingsModule = () => {
                           placeholder="./uploads/courriers/depart"
                         />
                         <button
-                          onClick={() => selectFolder('outgoing')}
-                          className="px-4 py-2 bg-green-600 hover:bg-green-700 text-white rounded-lg flex items-center space-x-2 transition-colors duration-200"
-                          title="Parcourir et sélectionner un dossier"
-                        >
-                          <FolderOpen size={16} />
-                          <span>Parcourir</span>
-                        </button>
-                        <button
-                          onClick={() => openFolder('outgoing')}
-                          disabled={!settings.storageFolders?.outgoing}
-                          className="px-3 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200"
-                          title="Ouvrir le dossier"
-                        >
-                          <Eye size={16} />
-                        </button>
-                        <button
                           onClick={() => testFolderAccess('outgoing')}
                           disabled={testingAccess.outgoing || !settings.storageFolders?.outgoing}
                           className="px-3 py-2 bg-green-100 hover:bg-green-200 text-green-700 rounded-lg disabled:opacity-50 disabled:cursor-not-allowed transition-colors duration-200 flex items-center space-x-1"
@@ -678,14 +440,14 @@ const SettingsModule = () => {
                             <>
                               <Check className="h-4 w-4 text-green-600" />
                               <span className="text-sm text-green-700 font-medium">
-                                Accès confirmé - Lecture/écriture autorisée
+                                Chemin valide
                               </span>
                             </>
                           ) : (
                             <>
                               <X className="h-4 w-4 text-red-600" />
                               <span className="text-sm text-red-700 font-medium">
-                                Accès refusé - Vérifiez les permissions du dossier
+                                Chemin invalide
                               </span>
                             </>
                           )}
@@ -693,158 +455,6 @@ const SettingsModule = () => {
                       )}
                     </div>
                   </div>
-
-                  {/* Informations importantes */}
-                  <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
-                    <div className="flex items-start space-x-3">
-                      <AlertCircle className="h-5 w-5 text-yellow-500 mt-0.5" />
-                      <div>
-                        <h5 className="font-medium text-yellow-900">Informations importantes</h5>
-                        <ul className="text-sm text-yellow-700 mt-1 space-y-1">
-                          <li>• Les dossiers doivent avoir les permissions de lecture/écriture</li>
-                          <li>• Utilisez le bouton "Parcourir" pour une sélection sécurisée</li>
-                          <li>• Testez toujours l'accès avant de sauvegarder</li>
-                          <li>• Les fichiers seront automatiquement renommés selon le format défini</li>
-                        </ul>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div>
-                <h5 className="font-medium text-gray-900 mb-4">Services externes</h5>
-                
-                {/* Google Drive */}
-                <div className="border border-gray-200 rounded-lg p-4 mb-4">
-                  <div className="flex items-center justify-between mb-3">
-                    <div className="flex items-center space-x-2">
-                      <Globe className="h-5 w-5 text-blue-500" />
-                      <span className="font-medium">Google Drive</span>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={settings.externalServices?.googleDrive?.enabled}
-                        onChange={(e) => setSettings({
-                          ...settings,
-                          externalServices: {
-                            ...settings.externalServices!,
-                            googleDrive: {
-                              ...settings.externalServices!.googleDrive!,
-                              enabled: e.target.checked
-                            }
-                          }
-                        })}
-                        className="sr-only peer"
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-blue-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-blue-600"></div>
-                    </label>
-                  </div>
-                  {settings.externalServices?.googleDrive?.enabled && (
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        ID du dossier Google Drive
-                      </label>
-                      <input
-                        type="text"
-                        value={settings.externalServices?.googleDrive?.folderId || ''}
-                        onChange={(e) => setSettings({
-                          ...settings,
-                          externalServices: {
-                            ...settings.externalServices!,
-                            googleDrive: {
-                              ...settings.externalServices!.googleDrive!,
-                              folderId: e.target.value
-                            }
-                          }
-                        })}
-                        className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                        placeholder="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms"
-                      />
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Backup Tab */}
-          {activeTab === 'backup' && (
-            <div className="space-y-6">
-              <div>
-                <h4 className="text-lg font-medium text-gray-900 mb-4">Sauvegarde automatique</h4>
-                
-                <div className="space-y-4">
-                  <div className="flex items-center justify-between p-4 bg-gray-50 rounded-lg">
-                    <div>
-                      <h5 className="font-medium text-gray-900">Activer la sauvegarde automatique</h5>
-                      <p className="text-sm text-gray-600">
-                        Sauvegarder automatiquement les données selon la fréquence définie
-                      </p>
-                    </div>
-                    <label className="relative inline-flex items-center cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={settings.autoBackup?.enabled}
-                        onChange={(e) => setSettings({
-                          ...settings,
-                          autoBackup: {
-                            ...settings.autoBackup!,
-                            enabled: e.target.checked
-                          }
-                        })}
-                        className="sr-only peer"
-                      />
-                      <div className="w-11 h-6 bg-gray-200 peer-focus:outline-none peer-focus:ring-4 peer-focus:ring-gray-300 rounded-full peer peer-checked:after:translate-x-full peer-checked:after:border-white after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:border-gray-300 after:border after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-gray-600"></div>
-                    </label>
-                  </div>
-
-                  {settings.autoBackup?.enabled && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Fréquence de sauvegarde
-                        </label>
-                        <select
-                          value={settings.autoBackup?.frequency}
-                          onChange={(e) => setSettings({
-                            ...settings,
-                            autoBackup: {
-                              ...settings.autoBackup!,
-                              frequency: e.target.value as any
-                            }
-                          })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-500 focus:border-transparent"
-                        >
-                          <option value="daily">Quotidienne</option>
-                          <option value="weekly">Hebdomadaire</option>
-                          <option value="monthly">Mensuelle</option>
-                        </select>
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          Service de sauvegarde
-                        </label>
-                        <select
-                          value={settings.autoBackup?.service}
-                          onChange={(e) => setSettings({
-                            ...settings,
-                            autoBackup: {
-                              ...settings.autoBackup!,
-                              service: e.target.value as any
-                            }
-                          })}
-                          className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-gray-500 focus:border-transparent"
-                        >
-                          <option value="googleDrive">Google Drive</option>
-                          <option value="dropbox">Dropbox</option>
-                          <option value="ftp">FTP</option>
-                        </select>
-                      </div>
-                    </div>
-                  )}
                 </div>
               </div>
             </div>
@@ -953,10 +563,10 @@ const SettingsModule = () => {
                     <div className="flex items-start space-x-3">
                       <Info className="h-5 w-5 text-blue-500 mt-0.5" />
                       <div>
-                        <h5 className="font-medium text-blue-900">Sécurité Firebase</h5>
+                        <h5 className="font-medium text-blue-900">Sécurité MySQL</h5>
                         <p className="text-sm text-blue-700 mt-1">
-                          L'authentification et la sécurité des données sont gérées par Firebase.
-                          Les règles de sécurité sont configurées au niveau du projet Firebase.
+                          L'authentification et la sécurité des données sont gérées par MySQL.
+                          Les mots de passe sont hachés avec bcrypt et l'authentification utilise JWT.
                         </p>
                       </div>
                     </div>
@@ -968,7 +578,7 @@ const SettingsModule = () => {
                       <div>
                         <h5 className="font-medium text-green-900">Chiffrement des données</h5>
                         <p className="text-sm text-green-700 mt-1">
-                          Toutes les données sont chiffrées en transit et au repos par Firebase.
+                          Toutes les données sensibles sont chiffrées et les connexions sécurisées.
                         </p>
                       </div>
                     </div>

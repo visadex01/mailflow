@@ -16,9 +16,7 @@ import {
   AlertCircle,
   Loader
 } from 'lucide-react';
-import { collection, getDocs, deleteDoc, doc, updateDoc } from 'firebase/firestore';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
-import { auth, db } from '../../config/firebase';
+import { DatabaseService } from '../../services/DatabaseService';
 import { User, ROLE_LABELS, ROLE_PERMISSIONS } from '../../types';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAuth } from '../../hooks/useAuth';
@@ -47,17 +45,13 @@ const UsersModule = () => {
   const loadUsers = async () => {
     try {
       setLoading(true);
-      const snapshot = await getDocs(collection(db, 'users'));
-      const usersData = snapshot.docs.map(doc => {
-        const data = doc.data();
-        return {
-          id: doc.id,
-          ...data,
-          createdAt: data.createdAt?.toDate() || new Date(),
-          lastLogin: data.lastLogin?.toDate() || null
-        } as User;
-      });
-      setUsers(usersData);
+      const data = await DatabaseService.getUsers();
+      setUsers(data.map(user => ({
+        ...user,
+        createdAt: new Date(user.created_at),
+        lastLogin: user.last_login ? new Date(user.last_login) : undefined,
+        permissions: typeof user.permissions === 'string' ? JSON.parse(user.permissions) : user.permissions
+      })));
     } catch (error) {
       console.error('Erreur lors du chargement des utilisateurs:', error);
       addNotification({
@@ -68,61 +62,6 @@ const UsersModule = () => {
       });
     } finally {
       setLoading(false);
-    }
-  };
-
-  const createNewUser = async (email: string, password: string, displayName: string, role: 'admin' | 'manager' | 'user') => {
-    try {
-      // Créer l'utilisateur avec Firebase Auth
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      
-      // Créer le profil utilisateur dans Firestore
-      const userDoc = doc(db, 'users', userCredential.user.uid);
-      await updateDoc(userDoc, {
-        email: email,
-        displayName: displayName,
-        role: role,
-        permissions: ROLE_PERMISSIONS[role],
-        createdAt: new Date(),
-        lastLogin: null,
-        isActive: true
-      });
-
-      addNotification({
-        type: 'success',
-        title: 'Utilisateur créé',
-        message: `Le compte ${displayName} (${ROLE_LABELS[role]}) a été créé avec succès.`,
-        persistent: false
-      });
-      
-    } catch (error: any) {
-      console.error('Erreur lors de la création de l\'utilisateur:', error);
-      
-      let errorMessage = 'Une erreur est survenue lors de la création du compte';
-      
-      switch (error.code) {
-        case 'auth/email-already-in-use':
-          errorMessage = 'Cette adresse email est déjà utilisée';
-          break;
-        case 'auth/invalid-email':
-          errorMessage = 'Adresse email invalide';
-          break;
-        case 'auth/weak-password':
-          errorMessage = 'Le mot de passe doit contenir au moins 6 caractères';
-          break;
-        case 'auth/operation-not-allowed':
-          errorMessage = 'La création de comptes est désactivée';
-          break;
-      }
-
-      addNotification({
-        type: 'error',
-        title: 'Erreur de création',
-        message: errorMessage,
-        persistent: true
-      });
-      
-      throw new Error(errorMessage);
     }
   };
 
@@ -185,7 +124,6 @@ const UsersModule = () => {
       return;
     }
 
-    // Validation du formulaire
     if (!validateForm()) {
       return;
     }
@@ -193,18 +131,16 @@ const UsersModule = () => {
     try {
       setSaving(true);
 
+      const userData = {
+        email: formData.email.trim(),
+        displayName: formData.displayName.trim(),
+        role: formData.role,
+        permissions: ROLE_PERMISSIONS[formData.role],
+        ...(formData.password && { password: formData.password })
+      };
+
       if (editingUser) {
-        // Mise à jour d'un utilisateur existant
-        console.log('Mise à jour de l\'utilisateur:', editingUser.id);
-        
-        await updateDoc(doc(db, 'users', editingUser.id), {
-          displayName: formData.displayName.trim(),
-          role: formData.role,
-          permissions: ROLE_PERMISSIONS[formData.role],
-          updatedAt: new Date(),
-          updatedBy: currentUser.id
-        });
-        
+        await DatabaseService.updateUser(editingUser.id, userData);
         addNotification({
           type: 'success',
           title: 'Utilisateur modifié',
@@ -212,18 +148,15 @@ const UsersModule = () => {
           persistent: false
         });
       } else {
-        // Création d'un nouvel utilisateur
-        console.log('Création d\'un nouvel utilisateur');
-        
-        await createNewUser(
-          formData.email.trim(),
-          formData.password,
-          formData.displayName.trim(),
-          formData.role
-        );
+        await DatabaseService.createUser(userData);
+        addNotification({
+          type: 'success',
+          title: 'Utilisateur créé',
+          message: `Le compte ${formData.displayName} a été créé avec succès.`,
+          persistent: false
+        });
       }
 
-      // Fermer le formulaire et recharger les données
       setShowForm(false);
       setEditingUser(null);
       resetForm();
@@ -231,15 +164,12 @@ const UsersModule = () => {
 
     } catch (error: any) {
       console.error('Erreur lors de l\'enregistrement de l\'utilisateur:', error);
-      // L'erreur est déjà gérée dans createNewUser pour la création
-      if (editingUser) {
-        addNotification({
-          type: 'error',
-          title: 'Erreur de modification',
-          message: 'Impossible de modifier l\'utilisateur. Veuillez réessayer.',
-          persistent: true
-        });
-      }
+      addNotification({
+        type: 'error',
+        title: 'Erreur d\'enregistrement',
+        message: error.message || 'Impossible d\'enregistrer l\'utilisateur. Veuillez réessayer.',
+        persistent: true
+      });
     } finally {
       setSaving(false);
     }
@@ -272,7 +202,7 @@ const UsersModule = () => {
     }
 
     try {
-      await deleteDoc(doc(db, 'users', userId));
+      await DatabaseService.deleteUser(userId);
       addNotification({
         type: 'success',
         title: 'Utilisateur supprimé',
@@ -286,42 +216,6 @@ const UsersModule = () => {
         type: 'error',
         title: 'Erreur de suppression',
         message: 'Impossible de supprimer l\'utilisateur.',
-        persistent: true
-      });
-    }
-  };
-
-  const toggleUserStatus = async (userId: string, currentStatus: boolean, displayName: string) => {
-    if (userId === currentUser?.id) {
-      addNotification({
-        type: 'warning',
-        title: 'Action interdite',
-        message: 'Vous ne pouvez pas désactiver votre propre compte.',
-        persistent: false
-      });
-      return;
-    }
-
-    try {
-      await updateDoc(doc(db, 'users', userId), {
-        isActive: !currentStatus,
-        updatedAt: new Date(),
-        updatedBy: currentUser!.id
-      });
-      
-      addNotification({
-        type: 'success',
-        title: 'Statut modifié',
-        message: `L'utilisateur "${displayName}" a été ${!currentStatus ? 'activé' : 'désactivé'}.`,
-        persistent: false
-      });
-      loadUsers();
-    } catch (error) {
-      console.error('Erreur lors de la modification du statut:', error);
-      addNotification({
-        type: 'error',
-        title: 'Erreur de modification',
-        message: 'Impossible de modifier le statut de l\'utilisateur.',
         persistent: true
       });
     }
@@ -458,18 +352,6 @@ const UsersModule = () => {
                   </div>
                   
                   <div className="flex items-center space-x-2">
-                    <button
-                      onClick={() => toggleUserStatus(user.id, user.isActive, user.displayName)}
-                      className={`px-3 py-1 text-xs font-medium rounded-full transition-colors duration-200 ${
-                        user.isActive 
-                          ? 'bg-green-100 text-green-800 hover:bg-green-200' 
-                          : 'bg-gray-100 text-gray-800 hover:bg-gray-200'
-                      }`}
-                      title={user.isActive ? 'Désactiver' : 'Activer'}
-                      disabled={user.id === currentUser?.id}
-                    >
-                      {user.isActive ? 'Actif' : 'Inactif'}
-                    </button>
                     <button 
                       onClick={() => handleEdit(user)}
                       className="p-2 text-gray-600 hover:text-orange-600 hover:bg-orange-50 rounded-lg transition-colors duration-200"
@@ -526,7 +408,6 @@ const UsersModule = () => {
             </div>
             
             <form onSubmit={handleSubmit} className="p-6 space-y-6">
-              {/* Barre de progression */}
               {saving && (
                 <div className="mb-4">
                   <div className="flex items-center justify-between mb-2">

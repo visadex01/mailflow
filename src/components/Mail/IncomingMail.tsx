@@ -1,8 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { Plus, Upload, Calendar, User, FileText, Tag, Search, Filter, Eye, Edit, Trash2, Download, AlertCircle, CheckCircle, Clock, X, PlaneLanding, Phone, Fan as Fax, Cloud, FileCheck, Sparkles, Loader } from 'lucide-react';
-import { collection, addDoc, getDocs, deleteDoc, doc, updateDoc, getDoc } from 'firebase/firestore';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { db, storage } from '../../config/firebase';
+import { Plus, Upload, Calendar, User, FileText, Tag, Search, Eye, Edit, Trash2, Download, AlertCircle, CheckCircle, Clock, X, PlaneLanding, Phone, Fax, Cloud, FileCheck, Sparkles, Loader } from 'lucide-react';
+import { DatabaseService } from '../../services/DatabaseService';
 import { IncomingMail, Category, Tag as TagType, Sender } from '../../types';
 import { useNotifications } from '../../hooks/useNotifications';
 import { useAuth } from '../../hooks/useAuth';
@@ -20,10 +18,7 @@ const IncomingMailComponent = () => {
   const [selectedPriority, setSelectedPriority] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [uploadProgress, setUploadProgress] = useState(0);
-  const [uploadStatus, setUploadStatus] = useState('');
   const [editingMail, setEditingMail] = useState<IncomingMail | null>(null);
-  const [settings, setSettings] = useState<any>(null);
   
   const [formData, setFormData] = useState({
     reference: '',
@@ -41,49 +36,22 @@ const IncomingMailComponent = () => {
 
   useEffect(() => {
     loadData();
-    loadSettings();
   }, []);
-
-  const loadSettings = async () => {
-    try {
-      const settingsDoc = await getDoc(doc(db, 'settings', 'global'));
-      if (settingsDoc.exists()) {
-        setSettings(settingsDoc.data());
-      } else {
-        // Paramètres par défaut si aucun n'existe
-        setSettings({
-          storageFolders: {
-            incoming: './uploads/courriers/arrivee',
-            outgoing: './uploads/courriers/depart'
-          }
-        });
-      }
-    } catch (error) {
-      console.error('Erreur lors du chargement des paramètres:', error);
-      // Utiliser les paramètres par défaut en cas d'erreur
-      setSettings({
-        storageFolders: {
-          incoming: './uploads/courriers/arrivee',
-          outgoing: './uploads/courriers/depart'
-        }
-      });
-    }
-  };
 
   const loadData = async () => {
     try {
       setLoading(true);
-      const [mailsSnapshot, categoriesSnapshot, tagsSnapshot, sendersSnapshot] = await Promise.all([
-        getDocs(collection(db, 'incomingMails')),
-        getDocs(collection(db, 'categories')),
-        getDocs(collection(db, 'tags')),
-        getDocs(collection(db, 'senders'))
+      const [mailsData, categoriesData, tagsData, sendersData] = await Promise.all([
+        DatabaseService.getIncomingMails(),
+        DatabaseService.getCategories(),
+        DatabaseService.getTags(),
+        DatabaseService.getSenders()
       ]);
 
-      setMails(mailsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as IncomingMail)));
-      setCategories(categoriesSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Category)));
-      setTags(tagsSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as TagType)));
-      setSenders(sendersSnapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Sender)));
+      setMails(mailsData);
+      setCategories(categoriesData);
+      setTags(tagsData);
+      setSenders(sendersData);
     } catch (error) {
       console.error('Erreur lors du chargement des données:', error);
       addNotification({
@@ -97,76 +65,8 @@ const IncomingMailComponent = () => {
     }
   };
 
-  const generateFileName = (file: File, reference: string, type: 'incoming' | 'outgoing') => {
-    const timestamp = Date.now();
-    const extension = file.name.split('.').pop()?.toLowerCase() || 'pdf';
-    const cleanReference = reference.replace(/[^a-zA-Z0-9]/g, '_');
-    const date = new Date().toISOString().split('T')[0];
-    
-    return `${type}_${cleanReference}_${date}_${timestamp}.${extension}`;
-  };
-
-  const uploadFileToStorage = async (file: File): Promise<string | null> => {
-    if (!file) return null;
-    
-    try {
-      setUploadStatus('Validation du fichier...');
-      setUploadProgress(5);
-      
-      // Validation du fichier
-      const maxSize = 10 * 1024 * 1024; // 10MB
-      if (file.size > maxSize) {
-        throw new Error('Le fichier ne doit pas dépasser 10MB');
-      }
-
-      const allowedTypes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
-      if (!allowedTypes.includes(file.type)) {
-        throw new Error('Seuls les fichiers PDF, JPG et PNG sont acceptés');
-      }
-
-      setUploadStatus('Préparation de l\'upload...');
-      setUploadProgress(15);
-
-      // Générer le nom de fichier
-      const fileName = generateFileName(file, formData.reference, 'incoming');
-      
-      // Déterminer le chemin de stockage
-      const storagePath = settings?.storageFolders?.incoming || 'incoming';
-      const fullPath = `${storagePath}/${fileName}`;
-
-      setUploadStatus('Upload en cours...');
-      setUploadProgress(25);
-      
-      // Upload vers Firebase Storage
-      const storageRef = ref(storage, fullPath);
-      
-      setUploadProgress(40);
-      setUploadStatus('Transfert des données...');
-      
-      const snapshot = await uploadBytes(storageRef, file);
-      
-      setUploadProgress(70);
-      setUploadStatus('Finalisation...');
-      
-      const downloadURL = await getDownloadURL(snapshot.ref);
-      
-      setUploadProgress(100);
-      setUploadStatus('Upload terminé !');
-      
-      console.log('Fichier uploadé avec succès:', downloadURL);
-      return downloadURL;
-      
-    } catch (error: any) {
-      console.error('Erreur lors de l\'upload:', error);
-      setUploadStatus('Erreur d\'upload');
-      throw new Error(error.message || 'Erreur lors de l\'upload du fichier');
-    }
-  };
-
   const createOrUpdateSender = async (): Promise<string> => {
     try {
-      setUploadStatus('Gestion de l\'expéditeur...');
-      
       // Chercher un expéditeur existant
       const existingSender = senders.find(s => 
         s.email === formData.senderEmail && formData.senderEmail ||
@@ -175,25 +75,21 @@ const IncomingMailComponent = () => {
       
       if (existingSender) {
         // Mettre à jour l'expéditeur existant
-        await updateDoc(doc(db, 'senders', existingSender.id), {
+        await DatabaseService.updateSender(existingSender.id, {
           name: formData.senderName,
           email: formData.senderEmail || '',
-          fax: formData.senderFax || '',
-          updatedAt: new Date(),
-          updatedBy: currentUser!.id
+          fax: formData.senderFax || ''
         });
         return existingSender.id;
       } else {
         // Créer un nouvel expéditeur
-        const senderDoc = await addDoc(collection(db, 'senders'), {
+        const senderId = await DatabaseService.createSender({
           name: formData.senderName,
           email: formData.senderEmail || '',
           fax: formData.senderFax || '',
-          createdAt: new Date(),
-          createdBy: currentUser!.id,
-          isActive: true
+          createdBy: currentUser!.id
         });
-        return senderDoc.id;
+        return senderId;
       }
     } catch (error) {
       console.error('Erreur lors de la gestion de l\'expéditeur:', error);
@@ -258,37 +154,17 @@ const IncomingMailComponent = () => {
       return;
     }
 
-    // Validation du formulaire
     if (!validateForm()) {
       return;
     }
 
     try {
       setSaving(true);
-      setUploadProgress(0);
-      setUploadStatus('Initialisation...');
 
-      console.log('Début de l\'enregistrement du courrier...');
-
-      // Étape 1: Upload du fichier si présent
-      let scanUrl = '';
-      if (formData.scanFile) {
-        console.log('Upload du fichier en cours...');
-        scanUrl = await uploadFileToStorage(formData.scanFile);
-        if (!scanUrl) {
-          throw new Error('Échec de l\'upload du fichier');
-        }
-        console.log('Fichier uploadé avec succès:', scanUrl);
-      }
-
-      // Étape 2: Créer ou mettre à jour l'expéditeur
-      console.log('Gestion de l\'expéditeur...');
-      setUploadStatus('Enregistrement de l\'expéditeur...');
+      // Créer ou mettre à jour l'expéditeur
       const senderId = await createOrUpdateSender();
-      console.log('Expéditeur géré avec succès:', senderId);
 
-      // Étape 3: Préparer les données du courrier
-      setUploadStatus('Enregistrement du courrier...');
+      // Préparer les données du courrier
       const mailData = {
         reference: formData.reference.trim(),
         subject: formData.subject.trim(),
@@ -298,23 +174,12 @@ const IncomingMailComponent = () => {
         tags: formData.selectedTags,
         arrivalDate: new Date(formData.arrivalDate),
         priority: formData.priority,
-        scanUrl: scanUrl,
-        createdAt: new Date(),
-        createdBy: currentUser.id,
-        isProcessed: false
+        scanUrl: '', // TODO: Gérer l'upload de fichier
+        createdBy: currentUser.id
       };
 
-      console.log('Données du courrier préparées:', mailData);
-
-      // Étape 4: Enregistrer le courrier
       if (editingMail) {
-        console.log('Mise à jour du courrier existant...');
-        await updateDoc(doc(db, 'incomingMails', editingMail.id), {
-          ...mailData,
-          updatedAt: new Date(),
-          updatedBy: currentUser.id
-        });
-        
+        await DatabaseService.updateIncomingMail(editingMail.id, mailData);
         addNotification({
           type: 'success',
           title: 'Courrier modifié',
@@ -322,10 +187,7 @@ const IncomingMailComponent = () => {
           persistent: false
         });
       } else {
-        console.log('Création d\'un nouveau courrier...');
-        const docRef = await addDoc(collection(db, 'incomingMails'), mailData);
-        console.log('Courrier créé avec l\'ID:', docRef.id);
-        
+        await DatabaseService.createIncomingMail(mailData);
         addNotification({
           type: 'success',
           title: 'Courrier ajouté',
@@ -334,19 +196,13 @@ const IncomingMailComponent = () => {
         });
       }
 
-      // Étape 5: Fermer le formulaire et recharger les données
-      console.log('Finalisation...');
-      setUploadStatus('Terminé !');
       setShowForm(false);
       setEditingMail(null);
       resetForm();
-      await loadData(); // Recharger la liste des courriers
-
-      console.log('Enregistrement terminé avec succès');
+      await loadData();
 
     } catch (error: any) {
       console.error('Erreur lors de l\'enregistrement:', error);
-      setUploadStatus('Erreur');
       addNotification({
         type: 'error',
         title: 'Erreur d\'enregistrement',
@@ -355,10 +211,6 @@ const IncomingMailComponent = () => {
       });
     } finally {
       setSaving(false);
-      setTimeout(() => {
-        setUploadProgress(0);
-        setUploadStatus('');
-      }, 2000);
     }
   };
 
@@ -387,7 +239,7 @@ const IncomingMailComponent = () => {
     }
 
     try {
-      await deleteDoc(doc(db, 'incomingMails', mailId));
+      await DatabaseService.deleteIncomingMail(mailId);
       addNotification({
         type: 'success',
         title: 'Courrier supprimé',
@@ -420,8 +272,6 @@ const IncomingMailComponent = () => {
       priority: 'normal',
       scanFile: null
     });
-    setUploadProgress(0);
-    setUploadStatus('');
   };
 
   const filteredMails = mails.filter(mail => {
@@ -449,41 +299,6 @@ const IncomingMailComponent = () => {
       case 'normal': return 'Normale';
       case 'low': return 'Faible';
       default: return 'Normale';
-    }
-  };
-
-  // Fonction pour gérer le drag & drop
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    e.stopPropagation();
-    
-    const files = Array.from(e.dataTransfer.files);
-    if (files.length > 0) {
-      const file = files[0];
-      
-      // Validation du type de fichier
-      const allowedTypes = ['application/pdf', 'image/jpeg', 'image/jpg', 'image/png'];
-      if (allowedTypes.includes(file.type)) {
-        setFormData({ ...formData, scanFile: file });
-        addNotification({
-          type: 'success',
-          title: 'Fichier ajouté',
-          message: `Le fichier "${file.name}" a été sélectionné.`,
-          persistent: false
-        });
-      } else {
-        addNotification({
-          type: 'error',
-          title: 'Type de fichier non supporté',
-          message: 'Seuls les fichiers PDF, JPG et PNG sont acceptés.',
-          persistent: false
-        });
-      }
     }
   };
 
@@ -763,34 +578,28 @@ const IncomingMailComponent = () => {
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Email de l'expéditeur
                   </label>
-                  <div className="relative">
-                    <input
-                      type="email"
-                      value={formData.senderEmail}
-                      onChange={(e) => setFormData({ ...formData, senderEmail: e.target.value })}
-                      className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="email@exemple.com"
-                      disabled={saving}
-                    />
-                    <Phone className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-                  </div>
+                  <input
+                    type="email"
+                    value={formData.senderEmail}
+                    onChange={(e) => setFormData({ ...formData, senderEmail: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="email@exemple.com"
+                    disabled={saving}
+                  />
                 </div>
                 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     Fax de l'expéditeur
                   </label>
-                  <div className="relative">
-                    <input
-                      type="tel"
-                      value={formData.senderFax}
-                      onChange={(e) => setFormData({ ...formData, senderFax: e.target.value })}
-                      className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-                      placeholder="+33 1 23 45 67 89"
-                      disabled={saving}
-                    />
-                    <Fax className="absolute left-3 top-2.5 h-4 w-4 text-gray-400" />
-                  </div>
+                  <input
+                    type="tel"
+                    value={formData.senderFax}
+                    onChange={(e) => setFormData({ ...formData, senderFax: e.target.value })}
+                    className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+                    placeholder="+33 1 23 45 67 89"
+                    disabled={saving}
+                  />
                 </div>
               </div>
 
@@ -890,45 +699,6 @@ const IncomingMailComponent = () => {
                 />
               </div>
 
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
-                  Scan du courrier
-                </label>
-                <div 
-                  className="border-2 border-dashed border-gray-300 rounded-lg p-6 text-center hover:border-blue-400 transition-colors duration-200 bg-gray-50"
-                  onDragOver={handleDragOver}
-                  onDrop={handleDrop}
-                >
-                  <Upload className="h-10 w-10 text-gray-400 mx-auto mb-2" />
-                  <p className="text-sm text-gray-600 mb-2">
-                    Cliquez pour uploader ou glissez-déposez le fichier
-                  </p>
-                  <p className="text-xs text-gray-500 mb-3">
-                    Formats acceptés: PDF, JPG, PNG (max 10MB)
-                  </p>
-                  <input
-                    type="file"
-                    accept=".pdf,.jpg,.jpeg,.png"
-                    onChange={(e) => setFormData({ ...formData, scanFile: e.target.files?.[0] || null })}
-                    className="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"
-                    disabled={saving}
-                  />
-                  {formData.scanFile && (
-                    <div className="mt-3 p-3 bg-green-50 rounded-lg border border-green-200">
-                      <div className="flex items-center justify-center space-x-2">
-                        <FileCheck className="h-5 w-5 text-green-500" />
-                        <p className="text-sm text-green-700 font-medium">
-                          Fichier sélectionné: {formData.scanFile.name}
-                        </p>
-                      </div>
-                      <p className="text-xs text-green-600 mt-1">
-                        Taille: {(formData.scanFile.size / 1024 / 1024).toFixed(2)} MB
-                      </p>
-                    </div>
-                  )}
-                </div>
-              </div>
-
               <div className="flex justify-end space-x-4 pt-6 border-t border-gray-200">
                 <button
                   type="button"
@@ -960,34 +730,6 @@ const IncomingMailComponent = () => {
                   )}
                 </button>
               </div>
-
-              {/* Barre de progression sous le bouton */}
-              {(saving || uploadProgress > 0) && (
-                <div className="mt-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-                  <div className="flex items-center justify-between mb-2">
-                    <span className="text-sm font-medium text-blue-700">
-                      {uploadStatus || 'Enregistrement en cours...'}
-                    </span>
-                    <span className="text-sm text-blue-600">
-                      {uploadProgress > 0 ? `${uploadProgress}%` : ''}
-                    </span>
-                  </div>
-                  <div className="w-full bg-blue-200 rounded-full h-3">
-                    <div 
-                      className="bg-gradient-to-r from-blue-500 to-blue-600 h-3 rounded-full transition-all duration-500 ease-out"
-                      style={{ 
-                        width: uploadProgress > 0 ? `${uploadProgress}%` : saving ? '100%' : '0%' 
-                      }}
-                    ></div>
-                  </div>
-                  {uploadProgress === 100 && (
-                    <div className="flex items-center justify-center mt-2">
-                      <CheckCircle className="h-4 w-4 text-green-500 mr-1" />
-                      <span className="text-sm text-green-600 font-medium">Upload terminé !</span>
-                    </div>
-                  )}
-                </div>
-              )}
             </form>
           </div>
         </div>
